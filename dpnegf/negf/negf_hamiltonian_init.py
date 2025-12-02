@@ -27,10 +27,10 @@ log = logging.getLogger(__name__)
 
 class NEGFHamiltonianInit(object):
     '''The Class for Hamiltonian object in negf module. 
-    
+
         It is used to initialize and manipulate device and lead Hamiltonians for negf.
         It is different from the Hamiltonian object in the dptb module.
-        
+
         Property
         ----------
         apiH: the API object for Hamiltonian
@@ -48,53 +48,54 @@ class NEGFHamiltonianInit(object):
         initialize: initializes the device and lead Hamiltonians
         get_hs_device: get the device Hamiltonian and overlap matrix at a specific kpoint
         get_hs_lead: get the lead Hamiltonian and overlap matrix at a specific kpoint
-        
+
     '''
 
-    def __init__(self, 
+    def __init__(self,
                  model: torch.nn.Module,
-                 AtomicData_options: dict, 
+                 AtomicData_options: dict,
                  structure: ase.Atoms,
                  block_tridiagonal: bool,
                  pbc_negf: List[bool],
-                 stru_options:dict, 
+                 stru_options:dict,
                  unit: str,
                  results_path:Optional[str]=None,
                  torch_device: Union[str, torch.device]=torch.device('cpu')
                  ) -> None:
-        
+
         # TODO: add dtype and device setting to the model
         # torch.set_default_dtype(torch.float64)
-        
+
         torch.set_default_dtype(model.dtype)
 
         if isinstance(torch_device, str):
             torch_device = torch.device(torch_device)
-        self.torch_device = torch_device   
+        self.torch_device = torch_device
         self.model = model
         self.AtomicData_options = AtomicData_options
         self.model.eval()
-        
+
         # get bondlist with pbc in all directions for complete chemical environment
-        # around atoms in the two ends of device when predicting HR 
+        # around atoms in the two ends of device when predicting HR
         if isinstance(structure,str):
-            self.structase = read(structure)           
+            self.structase = read(structure)
         elif isinstance(structure,ase.Atoms):
             self.structase = structure
         else:
             raise ValueError('structure must be ase.Atoms or str')
-        
+
         # check the structure cell is larger than the range of device and leads
         # In DPNEGF, the whole structure should be completely included in the cell
         # for correct prediction of Hamiltonian and overlap matrix.
         # TODO: Add support for non-ortho cell
-        xrange,yrange,zrange = self.structase.positions[:,0].max()-self.structase.positions[:,0].min(),\
-            self.structase.positions[:,1].max()-self.structase.positions[:,1].min(),\
-            self.structase.positions[:,2].max()-self.structase.positions[:,2].min()
-        if xrange > self.structase.cell[0][0] or yrange > self.structase.cell[1][1] or zrange > self.structase.cell[2][2]:
-            log.error(msg="The structure cell is smaller than the range of device and leads.")
-            raise ValueError
-        
+        tol = 1e-8  # If the difference is less than or equal to tol, it is considered to meet the standard (allowing machine error)
+        escape_distances = [self.structase.positions[:, dim].max() - self.structase.positions[:, dim].min() -
+                            self.structase.cell[dim][dim] for dim in [0, 1, 2]]
+        if max(escape_distances) > tol:
+            msg = f"The structure cell is smaller than the range of device and leads. Out bound distance:{max(escape_distances)}"
+            log.error(msg=msg)
+            raise ValueError(msg)
+
         self.unit = unit
         self.stru_options = stru_options
         self.pbc_negf = pbc_negf
@@ -104,11 +105,11 @@ class NEGFHamiltonianInit(object):
         self.subblocks = None
 
         self.h2k = HR2HK(
-            idp=model.idp, 
-            edge_field=AtomicDataDict.EDGE_FEATURES_KEY, 
-            node_field=AtomicDataDict.NODE_FEATURES_KEY, 
-            out_field=AtomicDataDict.HAMILTONIAN_KEY, 
-            dtype= model.dtype, 
+            idp=model.idp,
+            edge_field=AtomicDataDict.EDGE_FEATURES_KEY,
+            node_field=AtomicDataDict.NODE_FEATURES_KEY,
+            out_field=AtomicDataDict.HAMILTONIAN_KEY,
+            dtype= model.dtype,
             device=self.torch_device,
             )
 
@@ -144,18 +145,18 @@ class NEGFHamiltonianInit(object):
                    use_saved_HS=False, saved_HS_path=None):
         '''This function initializes the structure and Hamiltonian for a system with optional block tridiagonal
         and Bloch factor parameters.
-        
+
         Parameters
         ----------
         kpoints
             Kpoints in the Brillouin zone
         block_tridiagnal, optional
-             a boolean flag that determines whether the Hamiltonian matrix should be stored in a block-tridiagonal form. 
+             a boolean flag that determines whether the Hamiltonian matrix should be stored in a block-tridiagonal form.
         useBloch, optional
-            a boolean flag that determines whether Bloch boundary conditions should be used in the lead self energy calculations. 
+            a boolean flag that determines whether Bloch boundary conditions should be used in the lead self energy calculations.
         bloch_factor
             a list of integers that determines the Bloch factor for the lead self energy calculations.
-        
+
         Returns
         -------
             The `initialize` method returns the following variables in this order:
@@ -165,10 +166,10 @@ class NEGFHamiltonianInit(object):
         - `bloch_sorted_indices`
         - `bloch_R_lists`
         - `subblocks`
-        
+
         '''
 
-        # structure initialization       
+        # structure initialization
         self.structase.set_pbc(self.pbc_negf)
         self.structase.pbc[2] = True
         structure_device = self.structase[self.device_id[0]:self.device_id[1]]
@@ -184,7 +185,7 @@ class NEGFHamiltonianInit(object):
                 lead_atom_range[kk] = [n_proj_atom_pre, n_proj_atom_pre + n_proj_atom_lead]
                 structure_leads[kk],structure_leads_fold[kk],\
                 bloch_sorted_indices[kk],bloch_R_lists[kk] = self.get_lead_structure(kk,n_proj_atom_lead,\
-                                useBloch=useBloch,bloch_factor=bloch_factor) 
+                                useBloch=useBloch,bloch_factor=bloch_factor)
 
         # Hamiltonian initialization
         if use_saved_HS:
@@ -214,9 +215,9 @@ class NEGFHamiltonianInit(object):
         '''This function initializes the Hamiltonian for a device with leads, handling various calculations
         and checks along the way.
 
-            Note that the structure cell range should be larger than the device+leads range for correct 
+            Note that the structure cell range should be larger than the device+leads range for correct
             prediction of Hamiltonian and overlap matrix.
-        
+
         Parameters
         ----------
         kpoints : List[List[float]]
@@ -239,19 +240,19 @@ class NEGFHamiltonianInit(object):
             The `lead_atom_range` parameter indicates the range of leads. The key of the dictionary is the
         lead name, and the value is a list containing the start and end indices of the lead atoms.
         structure_leads : Atoms
-            The `structure_leads` parameter is an Atoms object containing the structures of the leads. 
+            The `structure_leads` parameter is an Atoms object containing the structures of the leads.
         structure_leads_fold : Atoms
-            The `structure_leads_fold` parameter is an Atoms object containing the folded structures of the leads 
+            The `structure_leads_fold` parameter is an Atoms object containing the folded structures of the leads
         by the Bloch theorem.
-            
-        
+
+
         Returns
         -------
         subblocks : List[int]
-        
+
         '''
-                                
-        
+
+
         HS_device = {}
         assert len(np.array(kpoints).shape) == 2
         HS_device["kpoints"] = kpoints
@@ -260,33 +261,33 @@ class NEGFHamiltonianInit(object):
         alldata = AtomicData.to_AtomicDataDict(alldata.to(self.torch_device))
         alldata = self.model.idp(alldata)
         alldata[AtomicDataDict.KPOINT_KEY] = \
-            torch.nested.as_nested_tensor([torch.as_tensor(HS_device["kpoints"], dtype=self.model.dtype, device=self.torch_device)])        
+            torch.nested.as_nested_tensor([torch.as_tensor(HS_device["kpoints"], dtype=self.model.dtype, device=self.torch_device)])
         alldata = self.model(alldata)
-        
+
         if alldata.get(AtomicDataDict.EDGE_OVERLAP_KEY,None) is not None:
             self.overlap = True
             self.s2k = HR2HK(
-                idp=self.model.idp, 
-                overlap=True, 
-                edge_field=AtomicDataDict.EDGE_OVERLAP_KEY, 
-                node_field=AtomicDataDict.NODE_OVERLAP_KEY, 
-                out_field=AtomicDataDict.OVERLAP_KEY, 
-                dtype=self.model.dtype, 
+                idp=self.model.idp,
+                overlap=True,
+                edge_field=AtomicDataDict.EDGE_OVERLAP_KEY,
+                node_field=AtomicDataDict.NODE_OVERLAP_KEY,
+                out_field=AtomicDataDict.OVERLAP_KEY,
+                dtype=self.model.dtype,
                 device=self.torch_device,
                 )
-        else: 
-            self.overlap = False   
+        else:
+            self.overlap = False
 
-        self.remove_bonds_nonpbc(data=alldata,pbc=self.pbc_negf,overlap=self.overlap)  
+        self.remove_bonds_nonpbc(data=alldata,pbc=self.pbc_negf,overlap=self.overlap)
         alldata = self.h2k(alldata)
         HK = alldata[AtomicDataDict.HAMILTONIAN_KEY]
 
-        if self.overlap: 
+        if self.overlap:
             alldata = self.s2k(alldata)
             SK = alldata[AtomicDataDict.OVERLAP_KEY]
         else:
-            SK = torch.eye(HK.shape[1], dtype=self.model.dtype, device=self.torch_device).unsqueeze(0).repeat(HK.shape[0], 1, 1)          
-      
+            SK = torch.eye(HK.shape[1], dtype=self.model.dtype, device=self.torch_device).unsqueeze(0).repeat(HK.shape[0], 1, 1)
+
         d_start = int(np.sum(self.atom_norbs[:self.device_id[0]]))
         d_end = int(np.sum(self.atom_norbs)-np.sum(self.atom_norbs[self.device_id[1]:]))
         HD, SD = HK[:,d_start:d_end, d_start:d_end], SK[:, d_start:d_end, d_start:d_end]
@@ -309,7 +310,7 @@ class NEGFHamiltonianInit(object):
                     HS_leads["kpoints"] = kpoints
                     HS_leads["kpoints_bloch"] = None
                     HS_leads["bloch_factor"] = None
-                        
+
                 l_start = int(np.sum(self.atom_norbs[:lead_atom_range[kk][0]]))
                 l_end = int(l_start + np.sum(self.atom_norbs[lead_atom_range[kk][0]:lead_atom_range[kk][1]]) / 2)
                 # lead hamiltonian in the first principal layer(the layer close to the device)
@@ -339,12 +340,12 @@ class NEGFHamiltonianInit(object):
                 else:
                     lead_data[AtomicDataDict.KPOINT_KEY] = \
                     torch.nested.as_nested_tensor([torch.as_tensor(HS_leads["kpoints"], dtype=self.model.dtype, device=self.torch_device)])
-                lead_data = self.model(lead_data)               
-             
+                lead_data = self.model(lead_data)
+
                 self.remove_bonds_nonpbc(data=lead_data,pbc=self.pbc_negf,overlap=self.overlap)
                 lead_data = self.h2k(lead_data)
                 HK_lead = lead_data[AtomicDataDict.HAMILTONIAN_KEY]
-                if self.overlap: 
+                if self.overlap:
                     lead_data = self.s2k(lead_data)
                     S_lead = lead_data[AtomicDataDict.OVERLAP_KEY]
                 else:
@@ -365,8 +366,8 @@ class NEGFHamiltonianInit(object):
                     err_l_SK = 0
                     rmse_l_HK = 0
                     rmse_l_SK = 0
-                
-                # if  max(err_l_HK,err_l_SK) >= 1e-3: 
+
+                # if  max(err_l_HK,err_l_SK) >= 1e-3:
                 if max(rmse_l_HK,rmse_l_SK) >= 1e-4:
                     # check the lead hamiltonian get from device and lead calculation matches each other
                     # a standard check to see the lead environment is bulk-like or not
@@ -385,18 +386,18 @@ class NEGFHamiltonianInit(object):
 
 
                 HS_leads.update({
-                    "HL":hL.cdouble()*self.h_factor, 
-                    "SL":sL.cdouble(), 
-                    "HDL":HDL.cdouble()*self.h_factor, 
+                    "HL":hL.cdouble()*self.h_factor,
+                    "SL":sL.cdouble(),
+                    "HDL":HDL.cdouble()*self.h_factor,
                     "SDL":SDL.cdouble(),
-                    "HLL":hLL.cdouble()*self.h_factor, 
+                    "HLL":hLL.cdouble()*self.h_factor,
                     "SLL":sLL.cdouble(),
                     "useBloch":useBloch
-                    })                
+                    })
 
-                lead_file = os.path.join(self.results_path, "HS_"+kk+".h5") 
+                lead_file = os.path.join(self.results_path, "HS_"+kk+".h5")
                 numpy_dtype = np.float32 if torch.get_default_dtype() == torch.float32 else np.float64
-                
+
                 with h5py.File(lead_file, "w") as f:
                     for key, items in HS_leads.items():
                         if key == "useBloch":
@@ -414,11 +415,11 @@ class NEGFHamiltonianInit(object):
                             f.create_dataset(f"{key}_imag", data=items.imag.numpy().astype(numpy_dtype))
                         else:
                             raise ValueError(f"Unsupported key {key} in HS_leads")
-                    
+
 
                 # torch.save(HS_leads, os.path.join(self.results_path, "HS_"+kk+".pth"))
 
-        
+
         if not block_tridiagnal:
             # change HD format to ( k_index,block_index=0, orb, orb)
             subblocks = [HD.shape[1]]
@@ -452,7 +453,7 @@ class NEGFHamiltonianInit(object):
                         for idx_k, item in enumerate(items):
                             assert isinstance(item, list), f"Unsupported type {type(item)} for {key}"
                             sub_block_len = len(item)
-                            for idx_block in range(sub_block_len):  
+                            for idx_block in range(sub_block_len):
                                 # group.create_dataset(f"{key}_k{idx_k}_b{idx_block}", data=item[idx_block].numpy())
                                 group.create_dataset(f"{key}_k{idx_k}_b{idx_block}_real", data=item[idx_block].real.numpy())
                                 group.create_dataset(f"{key}_k{idx_k}_b{idx_block}_imag", data=item[idx_block].imag.numpy())
@@ -480,7 +481,7 @@ class NEGFHamiltonianInit(object):
         '''
         calculate the displacement vector between two principal layers of lead structure,
         by subtracting the coordinates of the first half atoms from the second half atoms.
-        This function can also be used to check the translational equivalence of the 
+        This function can also be used to check the translational equivalence of the
         coordinates between two principal layers.
 
         Parameters
@@ -489,12 +490,12 @@ class NEGFHamiltonianInit(object):
             The coordinates of the atoms in the lead structure.
         thr : float, optional
             The threshold for the translational equivalence error, by default 1e-6.
-        
+
         Returns
         -------
         np.ndarray
             The displacement vector between the two principal layers of the lead structure.
-        
+
         Raises
         -------
         ValueError
@@ -554,9 +555,9 @@ class NEGFHamiltonianInit(object):
         pbc_lead[2] = True
 
         # get lead structure in ase format
-        stru_lead = Atoms(str(stru_lead.symbols), 
-                            positions=stru_lead.positions, 
-                            cell=cell, 
+        stru_lead = Atoms(str(stru_lead.symbols),
+                            positions=stru_lead.positions,
+                            cell=cell,
                             pbc=pbc_lead)
         stru_lead.set_chemical_symbols(stru_lead.get_chemical_symbols())
         write(os.path.join(self.results_path, "stru_leadall_"+kk+".xyz"),stru_lead,format='extxyz')
@@ -575,8 +576,8 @@ class NEGFHamiltonianInit(object):
             for ip,pos in enumerate(stru_lead.get_positions()):
                 if pos[0]<bloch_reduce_cell[0][0]-delta and pos[1]<bloch_reduce_cell[1][1]-delta:
                     new_positions.append(pos)
-                    new_atomic_numbers.append(stru_lead.get_atomic_numbers()[ip])           
-            
+                    new_atomic_numbers.append(stru_lead.get_atomic_numbers()[ip])
+
             stru_lead_fold = Atoms(numbers=new_atomic_numbers,
                               positions=new_positions,
                               cell=bloch_reduce_cell,
@@ -590,22 +591,22 @@ class NEGFHamiltonianInit(object):
                 natom_1PL = int(len(stru_lead_fold)/2)
                 stru_lead_fold.positions[:natom_1PL,2],stru_lead_fold.positions[natom_1PL:,2] = \
                     stru_lead_fold.positions[natom_1PL:,2],stru_lead_fold.positions[:natom_1PL,2].copy()
-            
+
             write(os.path.join(self.results_path, "stru_lead_fold_"+kk+".xyz"),stru_lead_fold,format='extxyz')
             log.info(msg="The lead structure is folded by Bloch theorem!")
 
             stru_lead_fold_1PL = stru_lead_fold[:int(len(stru_lead_fold)/2)]
-            stru_lead_fold_minz = stru_lead_fold_1PL.positions[:,2].min() 
+            stru_lead_fold_minz = stru_lead_fold_1PL.positions[:,2].min()
             bloch_R_list = []; expand_pos = []
             for rz in range(bloch_factor[2]):
                 for ry in range(bloch_factor[1]):
-                    for rx in range(bloch_factor[0]):     
+                    for rx in range(bloch_factor[0]):
                         R = torch.tensor([rx,ry,rz],dtype=torch.float64)
                         bloch_R_list.append(R)
                         for id in range(len(stru_lead_fold_1PL)):
                             pos = torch.tensor(stru_lead_fold_1PL.positions[id]) + \
                                 R[0]*bloch_reduce_cell[0] + R[1]*bloch_reduce_cell[1] - stru_lead_fold_minz*torch.tensor([0,0,1])
-                            expand_pos.append(pos)            
+                            expand_pos.append(pos)
             expand_pos = np.stack(expand_pos) # expand_pos is for 1 PL
             assert len(expand_pos) == int(len(stru_lead)/2)
 
@@ -615,14 +616,14 @@ class NEGFHamiltonianInit(object):
             kdtree = KDTree(expand_pos)
             _, sorted_indices = kdtree.query(struct_lead_pos,k=1,eps=1e-3)
 
-            
+
             self.model.idp.get_orbital_maps()
             orb_dict = self.model.idp.norbs
             orb_list = np.array([ orb_dict[el] for el in stru_lead_fold_1PL.get_chemical_symbols()]*len(bloch_R_list))
             expand_basis_index = np.cumsum(orb_list)
             bloch_sorted_indice = []
             for ia in sorted_indices:
-                for k in range(orb_list[ia]): 
+                for k in range(orb_list[ia]):
                     bloch_sorted_indice.append(expand_basis_index[ia]-orb_list[ia]+k)
             bloch_sorted_indice = np.stack(bloch_sorted_indice)
             bloch_sorted_indice = torch.from_numpy(bloch_sorted_indice)
@@ -633,7 +634,7 @@ class NEGFHamiltonianInit(object):
             bloch_sorted_indice = None
             bloch_R_list = None
 
-        
+
         return stru_lead, stru_lead_fold, bloch_sorted_indice, bloch_R_list
 
     def get_block_tridiagonal(self,HK,SK,structase:ase.Atoms,leftmost_size:int,rightmost_size:int):
@@ -684,18 +685,18 @@ class NEGFHamiltonianInit(object):
         if leftmost_size is None:
             leftmost_atoms_index = np.where(structase.positions[:,2]==min(structase.positions[:,2]))[0]
             leftmost_size = sum([self.atom_norbs[leftmost_atoms_index[i]] for i in range(len(leftmost_atoms_index))])
-        if rightmost_size is None:   
+        if rightmost_size is None:
             rightmost_atoms_index = np.where(structase.positions[:,2]==max(structase.positions[:,2]))[0]
             rightmost_size = sum([self.atom_norbs[rightmost_atoms_index[i]] for i in range(len(rightmost_atoms_index))])
-        
+
         subblocks = split_into_subblocks_optimized(HK[0],leftmost_size,rightmost_size)
         if subblocks[0] < leftmost_size or subblocks[-1] < rightmost_size:
             subblocks = split_into_subblocks(HK[0],leftmost_size,rightmost_size)
             log.info(msg="The optimized block tridiagonalization is not successful, \
                      the original block tridiagonalization is used.")
         subblocks = [0]+subblocks
-        
-        
+
+
         for ik in range(HK.shape[0]):
             hd_k,hu_k,hl_k,sd_k,su_k,sl_k = [],[],[],[],[],[]
             counted_block = 0
@@ -711,22 +712,22 @@ class NEGFHamiltonianInit(object):
                 if id > 0:
                     l_slice = slice(counted_block-subblocks[id],counted_block)
                     hl_k.append(HK[ik,d_slice,l_slice])
-                    sl_k.append(SK[ik,d_slice,l_slice]) 
+                    sl_k.append(SK[ik,d_slice,l_slice])
             hd.append(hd_k);hu.append(hu_k);hl.append(hl_k)
             sd.append(sd_k);su.append(su_k);sl.append(sl_k)
 
-            
+
         num_diag = sum([i**2 for i in subblocks])
         num_updiag = sum([subblocks[i]*subblocks[i+1] for i in range(len(subblocks)-1)])
         num_lowdiag = num_updiag
         num_total = num_diag+num_updiag+num_lowdiag
         log.info(msg="The Hamiltonian is block tridiagonalized into {} subblocks.".format(len(hd[0])))
         log.info(msg="   the number of elements in subblocks: {}".format(num_total))
-        log.info(msg="               occupation of subblocks: {} %".format(num_total/(HK[0].shape[0]**2)*100))     
+        log.info(msg="               occupation of subblocks: {} %".format(num_total/(HK[0].shape[0]**2)*100))
 
         subblocks = subblocks[1:]
         show_blocks(subblocks,HK[0],self.results_path)
-        
+
         return hd, hu, hl, sd, su, sl, subblocks
 
     def get_hs_device(self, kpoint=[0,0,0], V=None, block_tridiagonal=False, only_subblocks=False):
@@ -735,12 +736,12 @@ class NEGFHamiltonianInit(object):
         In diagonalization mode, the Hamiltonian and overlap matrix are block tridiagonalized,
         and hd,hu,hl refers to the diagnonal, upper and lower blocks of the Hamiltonian, respectively.
         The same rules apply to sd, su, sl.
-        
+
         Args:
             kpoints: k-points in the Brillouin zone with three coordinates (kx, ky, kz)
             V: voltage bias
             block_tridiagonal:  a boolean flag that shows whether Hamiltonian has been diagonalized or not
-        
+
         Returns:
             if not diagonalized, return the whole Hamiltonian and Overlap HD-V*SD, SD
             if diagonalized, return the block tridiagonalized Hamiltonian and Overlap component hd, hu, hl,
@@ -748,7 +749,7 @@ class NEGFHamiltonianInit(object):
         """
         if self.saved_HS_path is None:
             self.saved_HS_path = self.results_path
-        
+
         HS_device_path_pth = os.path.join(self.saved_HS_path, "HS_device.pth")
         HS_device_path_h5 = os.path.join(self.saved_HS_path, "HS_device.h5")
 
@@ -756,14 +757,14 @@ class NEGFHamiltonianInit(object):
         #in this version, we only support complex128 for complex dtype to ensure the accuracy.
         #TODO: check other complex dtype
         complex_dtype = torch.complex128 if torch_dtype == torch.float32 else torch.complex128
-        
+
         if os.path.exists(HS_device_path_h5):
             # log.info(msg="The HS_device.h5 exists in the saved path {}.".format(self.saved_HS_path))
             HS_device_path = HS_device_path_h5
             HS_device = {}
             with h5py.File(HS_device_path, "r") as f:
                 for key in f.keys():
-                    if isinstance(f[key], h5py.Dataset): 
+                    if isinstance(f[key], h5py.Dataset):
                         if key in ["kpoints", "subblocks"]:
                             HS_device[key] = np.array(f[key])
                         elif key == "block_tridiagonal":
@@ -772,7 +773,7 @@ class NEGFHamiltonianInit(object):
                             assert isinstance(f[key][()], np.ndarray),f"Expected np.ndarray, but got {type(f[key][()])}"
                             # read NumPy array: HD, SD, Hall, Sall
                             HS_device[key] = torch.tensor(f[key][()])
-                    else:  
+                    else:
                         group = f[key]
                         items = [];sublist = []
                         sub_keys = natsorted(group.keys())  # ensure the order of subblocks
@@ -799,24 +800,24 @@ class NEGFHamiltonianInit(object):
                         if sublist:
                             items.append(sublist)  # store the last sublist
                         HS_device[key] = items # idx_k, idx_block
-        
+
         elif os.path.exists(HS_device_path_pth):
             # log.info(msg="The HS_device.pth exists in the saved path {}.".format(self.saved_HS_path))
             HS_device_path = HS_device_path_pth
             HS_device = torch.load(HS_device_path)
         else:
             raise FileNotFoundError(f"Neither HS_device.pth nor HS_device.h5 found in {self.saved_HS_path}. " )
-                  
-                
+
+
         if only_subblocks:
             if "subblocks" not in HS_device:
                 log.warning(msg=" 'subblocks' might not be saved in the HS_device.pth for old version.")
                 log.error(msg="The subblocks are not saved in the HS_device.pth.")
-                
+
                 raise ValueError
             subblocks = HS_device["subblocks"]
             return subblocks
-        
+
         kpoints = HS_device["kpoints"]
         ik = None
         for i, k in enumerate(kpoints):
@@ -826,8 +827,8 @@ class NEGFHamiltonianInit(object):
 
         assert ik is not None
 
-            
-        
+
+
         if block_tridiagonal:
             # hd format: ( k_index,block_index, orb, orb)
             hd_k, sd_k, hl_k, su_k, sl_k, hu_k = HS_device["hd"][ik], HS_device["sd"][ik],\
@@ -843,29 +844,29 @@ class NEGFHamiltonianInit(object):
                 l_slice = slice(counted, counted+hd_k[i].shape[0])
                 V_sub = V[l_slice].view(-1,1).cdouble()
                 hd_k[i] = hd_k[i] - V_sub * sd_k[i]
-                if i<len(hd_k)-1: 
+                if i<len(hd_k)-1:
                     hu_k[i] = hu_k[i] - V_sub * su_k[i]
                 if i > 0:
                     hl_k[i-1] = hl_k[i-1] - V_sub * sl_k[i-1]
                 counted += hd_k[i].shape[0]
-            
+
             return hd_k , sd_k, hl_k , su_k, sl_k, hu_k
         else:
             HD_k, SD_k = HS_device["HD"][ik], HS_device["SD"][ik]
             return HD_k - V*SD_k, SD_k, [], [], [], []
-    
+
     def get_hs_lead(self, kpoint, tab, v):
         """get the lead Hamiltonian and overlap matrix at a specific kpoint
-        
+
         In diagonalization mode, the Hamiltonian and overlap matrix are block tridiagonalized,
         and hd,hu,hl refers to the diagnonal, upper and lower blocks of the Hamiltonian, respectively.
         The same rules apply to sd, su, sl.
-        
+
         Args:
             kpoints: k-points in the Brillouin zone with three coordinates (kx, ky, kz)
             V: voltage bias
             block_tridiagonal:  a boolean flag that shows whether Hamiltonian has been diagonalized or not
-        
+
         Returns:
             if not diagonalized, return the whole Hamiltonian and Overlap HD-V*SD, SD
             if diagonalized, return the block tridiagonalized Hamiltonian and Overlap component hd, hu, hl,
@@ -887,7 +888,7 @@ class NEGFHamiltonianInit(object):
             HS_lead_path = HS_lead_path_h5
             with h5py.File(HS_lead_path, "r") as f:
                 for key in f.keys():
-                    dataset = f[key]  
+                    dataset = f[key]
                     if key == "useBloch":
                         HS_leads[key] = bool(dataset[()])
                     elif key == "kpoints":
@@ -914,7 +915,7 @@ class NEGFHamiltonianInit(object):
         else:
             log.error(msg="The HS_{0}.pth or HS_{0}.h5 does not exist in the saved path {1}.".format(tab, self.saved_HS_path))
             raise ValueError
-        
+
         kpoints = HS_leads["kpoints"]
         kpoints_bloch = HS_leads["kpoints_bloch"]
         bloch_factor = HS_leads["bloch_factor"]
@@ -946,11 +947,11 @@ class NEGFHamiltonianInit(object):
                                HS_leads["SL"][ik_bloch], HS_leads["SLL"][ik_bloch]
             hDL,sDL = HS_leads["HDL"][ik], HS_leads["SDL"][ik]
 
-        return hL-v*sL, hLL-v*sLL, hDL, sL, sLL, sDL         
+        return hL-v*sL, hLL-v*sLL, hDL, sL, sLL, sDL
 
     @property
     def device_norbs(self):
-        """ 
+        """
         return the number of atoms in the device Hamiltonian
         """
         return self.atom_norbs[self.device_id[0]:self.device_id[1]]
@@ -960,11 +961,11 @@ class NEGFHamiltonianInit(object):
     #     return hd, hu, hl, sd, su, sl
 
 # class _NEGFHamiltonianInit(object):
-#     '''The Class for Hamiltonian object in negf module. 
-    
+#     '''The Class for Hamiltonian object in negf module.
+
 #         It is used to initialize and manipulate device and lead Hamiltonians for negf.
 #         It is different from the Hamiltonian object in the dptb module.
-        
+
 #         Property
 #         ----------
 #         apiH: the API object for Hamiltonian
@@ -982,7 +983,7 @@ class NEGFHamiltonianInit(object):
 #         initialize: initializes the device and lead Hamiltonians
 #         get_hs_device: get the device Hamiltonian and overlap matrix at a specific kpoint
 #         get_hs_lead: get the lead Hamiltonian and overlap matrix at a specific kpoint
-        
+
 #     '''
 
 #     def __init__(self, apiH, structase, stru_options, results_path) -> None:
@@ -991,7 +992,7 @@ class NEGFHamiltonianInit(object):
 #         self.structase = structase
 #         self.stru_options = stru_options
 #         self.results_path = results_path
-        
+
 #         self.device_id = [int(x) for x in self.stru_options.get("device")["id"].split("-")]
 #         self.lead_ids = {}
 #         for kk in self.stru_options:
@@ -1009,22 +1010,22 @@ class NEGFHamiltonianInit(object):
 #             raise ValueError
 
 #     def initialize(self, kpoints, block_tridiagnal=False):
-#         """initializes the device and lead Hamiltonians 
-        
-#         construct device and lead Hamiltonians and return the structures respectively.The lead Hamiltonian 
+#         """initializes the device and lead Hamiltonians
+
+#         construct device and lead Hamiltonians and return the structures respectively.The lead Hamiltonian
 #         is k-resolved due to the transverse k point sampling.
 
-#         Args: 
+#         Args:
 #                 kpoints: k-points in the Brillouin zone with three coordinates (kx, ky, kz)
 #                 block_tridiagnal: A boolean parameter that determines whether to block-tridiagonalize the
-#                     device Hamiltonian or not. 
+#                     device Hamiltonian or not.
 
-#         Returns: 
+#         Returns:
 #                 structure_device and structure_leads corresponding to the structure of device and leads.
 
 #         Raises:
-#                 RuntimeError: if the lead hamiltonian attained from device and lead calculation does not match.                
-        
+#                 RuntimeError: if the lead hamiltonian attained from device and lead calculation does not match.
+
 #         """
 #         assert len(np.array(kpoints).shape) == 2
 
@@ -1053,7 +1054,7 @@ class NEGFHamiltonianInit(object):
 #         d_start = int(np.sum(self.atom_norbs[:proj_device_id[0]]))
 #         d_end = int(np.sum(self.atom_norbs)-np.sum(self.atom_norbs[proj_device_id[1]:]))
 #         HD, SD = H[:,d_start:d_end, d_start:d_end], S[:, d_start:d_end, d_start:d_end]
-        
+
 #         if not block_tridiagnal:
 #             HS_device.update({"HD":HD.cdouble()*self.h_factor, "SD":SD.cdouble()})
 #         else:
@@ -1062,7 +1063,7 @@ class NEGFHamiltonianInit(object):
 
 #         torch.save(HS_device, os.path.join(self.results_path, "HS_device.pth"))
 #         structure_device = self.apiH.structure.projected_struct[self.device_id[0]:self.device_id[1]]
-        
+
 #         structure_leads = {}
 #         for kk in self.stru_options:
 #             if kk.startswith("lead"):
@@ -1082,13 +1083,13 @@ class NEGFHamiltonianInit(object):
 #                 HL, SL = H[:,l_start:l_end, l_start:l_end], S[:, l_start:l_end, l_start:l_end] # lead hamiltonian in one principal layer
 #                 HDL, SDL = H[:,d_start:d_end, l_start:l_end], S[:,d_start:d_end, l_start:l_end] # device and lead's hopping
 #                 HS_leads.update({
-#                     "HL":HL.cdouble()*self.h_factor, 
-#                     "SL":SL.cdouble(), 
-#                     "HDL":HDL.cdouble()*self.h_factor, 
+#                     "HL":HL.cdouble()*self.h_factor,
+#                     "SL":SL.cdouble(),
+#                     "HDL":HDL.cdouble()*self.h_factor,
 #                     "SDL":SDL.cdouble()}
 #                     )
 
-                
+
 #                 structure_leads[kk] = self.apiH.structure.struct
 #                 self.apiH.get_HR()
 #                 # output the allbonds and hamil_block for check
@@ -1107,28 +1108,28 @@ class NEGFHamiltonianInit(object):
 #                     log.warning(msg="WARNING, the lead's hamiltonian attained from diffferent methods have slight differences {:.7f}.".format(err_l))
 
 #                 HS_leads.update({
-#                     "HLL":HLL.cdouble()*self.h_factor, 
+#                     "HLL":HLL.cdouble()*self.h_factor,
 #                     "SLL":SLL.cdouble()}
 #                     )
-                
+
 #                 HS_leads["kpoints"] = kpoints
-                
+
 #                 torch.save(HS_leads, os.path.join(self.results_path, "HS_"+kk+".pth"))
-        
+
 #         return structure_device, structure_leads
-    
+
 #     def get_hs_device(self, kpoint, V, block_tridiagonal=False):
 #         """ get the device Hamiltonian and overlap matrix at a specific kpoint
 
 #         In diagonalization mode, the Hamiltonian and overlap matrix are block tridiagonalized,
 #         and hd,hu,hl refers to the diagnonal, upper and lower blocks of the Hamiltonian, respectively.
 #         The same rules apply to sd, su, sl.
-        
+
 #         Args:
 #             kpoints: k-points in the Brillouin zone with three coordinates (kx, ky, kz)
 #             V: voltage bias
 #             block_tridiagonal:  a boolean flag that shows whether Hamiltonian has been diagonalized or not
-        
+
 #         Returns:
 #             if not diagonalized, return the whole Hamiltonian and Overlap HD-V*SD, SD
 #             if diagonalized, return the block tridiagonalized Hamiltonian and Overlap component hd, hu, hl,
@@ -1149,7 +1150,7 @@ class NEGFHamiltonianInit(object):
 #             HD, SD = f["HD"][ix], f["SD"][ix]
 #         else:
 #             hd, sd, hl, su, sl, hu = f["hd"][ix], f["sd"][ix], f["hl"][ix], f["su"][ix], f["sl"][ix], f["hu"][ix]
-        
+
 #         if block_tridiagonal:
 #             return hd, sd, hl, su, sl, hu
 #         else:
@@ -1157,21 +1158,21 @@ class NEGFHamiltonianInit(object):
 #             # print('SD shape:', SD.shape)
 #             # print('V shape:', V.shape)
 #             log.info(msg='Device Hamiltonian shape: {0}x{0}'.format(HD.shape[0], HD.shape[1]))
-            
+
 #             return [HD - V*SD], [SD], [], [], [], []
-    
+
 #     def get_hs_lead(self, kpoint, tab, v):
 #         """get the lead Hamiltonian and overlap matrix at a specific kpoint
-        
+
 #         In diagonalization mode, the Hamiltonian and overlap matrix are block tridiagonalized,
 #         and hd,hu,hl refers to the diagnonal, upper and lower blocks of the Hamiltonian, respectively.
 #         The same rules apply to sd, su, sl.
-        
+
 #         Args:
 #             kpoints: k-points in the Brillouin zone with three coordinates (kx, ky, kz)
 #             V: voltage bias
 #             block_tridiagonal:  a boolean flag that shows whether Hamiltonian has been diagonalized or not
-        
+
 #         Returns:
 #             if not diagonalized, return the whole Hamiltonian and Overlap HD-V*SD, SD
 #             if diagonalized, return the block tridiagonalized Hamiltonian and Overlap component hd, hu, hl,
