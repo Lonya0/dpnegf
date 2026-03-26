@@ -3,6 +3,8 @@ from typing import List
 from dpnegf.negf.surface_green import selfEnergy
 import logging
 import os
+import shutil
+import tempfile
 from dpnegf.utils.constants import Boltzmann, eV2J
 import numpy as np
 from dpnegf.negf.bloch import Bloch
@@ -630,6 +632,10 @@ def compute_all_self_energy(eta, lead_L, lead_R, kpoints_grid, energy_grid,
                         "Self energy files will be saved in lead_L's results_path.")
         self_energy_save_path = os.path.join(lead_L.results_path, "self_energy")
 
+    self_energy_save_path = os.path.abspath(self_energy_save_path)
+    os.makedirs(self_energy_save_path, exist_ok=True)
+    temp_dir = tempfile.mkdtemp(prefix="tmp_self_energy_", dir=self_energy_save_path)
+
     # Calculate safe number of workers based on available memory
     # Use first k-point for memory estimation
     sample_kpoint = kpoints_grid[0] if len(kpoints_grid) > 0 else None
@@ -642,14 +648,14 @@ def compute_all_self_energy(eta, lead_L, lead_R, kpoints_grid, energy_grid,
     total_tasks = [(k, e) for k in kpoints_grid for e in energy_grid]
     if len(total_tasks) <= batch_size:
         Parallel(n_jobs=safe_n_jobs, backend="loky")(
-            delayed(self_energy_worker)(k, e, eta, lead_L, lead_R, self_energy_save_path)
+            delayed(self_energy_worker)(k, e, eta, lead_L, lead_R, temp_dir)
             for k, e in total_tasks
         )
     else:
         for i in range(0, len(total_tasks), batch_size):
             batch = total_tasks[i:i+batch_size]
             Parallel(n_jobs=safe_n_jobs, backend="loky")(
-                delayed(self_energy_worker)(k, e, eta, lead_L, lead_R, self_energy_save_path)
+                delayed(self_energy_worker)(k, e, eta, lead_L, lead_R, temp_dir)
                 for k, e in batch
             )
 
@@ -657,14 +663,22 @@ def compute_all_self_energy(eta, lead_L, lead_R, kpoints_grid, energy_grid,
     save_path_L = os.path.join(self_energy_save_path, "self_energy_leadL.h5")
     save_path_R = os.path.join(self_energy_save_path, "self_energy_leadR.h5")
 
-    merge_hdf5_files(self_energy_save_path, save_path_L, pattern="tmp_leadL_*.h5")
-    merge_hdf5_files(self_energy_save_path, save_path_R, pattern="tmp_leadR_*.h5")
+    try:
+        merge_hdf5_files(temp_dir, save_path_L, pattern="tmp_leadL_*.h5")
+        merge_hdf5_files(temp_dir, save_path_R, pattern="tmp_leadR_*.h5")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to merge self-energy temporary files from '{temp_dir}'. "
+            "Temporary files were preserved for debugging."
+        ) from exc
+
+    shutil.rmtree(temp_dir)
 
 
 
 
 
-def self_energy_worker(k, e, eta, lead_L, lead_R, self_energy_save_path):
+def self_energy_worker(k, e, eta, lead_L, lead_R, temp_dir):
     """
     Calculates the self-energy for left and right leads at a given k-point and energy,
     and saves the results to HDF5 files.
@@ -681,8 +695,8 @@ def self_energy_worker(k, e, eta, lead_L, lead_R, self_energy_save_path):
         The left lead object, which must implement a `self_energy_cal` method.
     lead_R : object
         The right lead object, which must implement a `self_energy_cal` method.
-    self_energy_save_path : str
-        Directory path where the self-energy HDF5 files will be saved.
+    temp_dir : str
+        Directory path where the temporary self-energy HDF5 shard files will be saved.
 
     Returns
     -------
@@ -690,8 +704,8 @@ def self_energy_worker(k, e, eta, lead_L, lead_R, self_energy_save_path):
         The function saves the calculated self-energies to files and does not return anything.
     """
 
-    save_tmp_L = os.path.join(self_energy_save_path, f"tmp_leadL_k{k[0]}_{k[1]}_{k[2]}_E{e:.8f}.h5")
-    save_tmp_R = os.path.join(self_energy_save_path, f"tmp_leadR_k{k[0]}_{k[1]}_{k[2]}_E{e:.8f}.h5")
+    save_tmp_L = os.path.join(temp_dir, f"tmp_leadL_k{k[0]}_{k[1]}_{k[2]}_E{e:.8f}.h5")
+    save_tmp_R = os.path.join(temp_dir, f"tmp_leadR_k{k[0]}_{k[1]}_{k[2]}_E{e:.8f}.h5")
 
     seL = lead_L.self_energy_cal(kpoint=k, energy=e, eta_lead=eta)
     seR = lead_R.self_energy_cal(kpoint=k, energy=e, eta_lead=eta)
