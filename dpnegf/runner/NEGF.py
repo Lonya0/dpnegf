@@ -117,6 +117,18 @@ class NEGF(object):
         else:
             self.override_overlap = None
 
+        if 'parallel_options' in kwargs:
+            assert isinstance(kwargs['parallel_options'], dict)
+            self.parallel_options = kwargs['parallel_options']
+            log.info(msg="Read parallel options from input!")
+        else:
+            self.parallel_options = {
+                "n_job": -1,
+                "batch_size": 200,
+                "backend": "loky"
+            }
+            log.info(msg="No parallel options Input, using default settings!")
+
         log.info(msg="------ k-point for NEGF -----")
         log.info(msg="Gamma Center: {0}".format(self.stru_options["gamma_center"]))
         log.info(msg="Time Reversal: {0}".format(self.stru_options["time_reversal_symmetry"]))
@@ -548,11 +560,17 @@ class NEGF(object):
                 #         self.deviceprop.lead_L.self_energy(kpoint=k, energy=e, eta_lead=self.eta_lead, save=True)
                 #         self.deviceprop.lead_R.self_energy(kpoint=k, energy=e, eta_lead=self.eta_lead, save=True)
                 compute_all_self_energy(self.eta_lead, self.deviceprop.lead_L, self.deviceprop.lead_R,
-                                        self.kpoints, self.density.integrate_range, self.self_energy_save_path)
+                                        self.kpoints, self.density.integrate_range, self.self_energy_save_path,
+                                        n_jobs=self.parallel_options["n_jobs"],
+                                        batch_size=self.parallel_options["batch_size"],
+                                        parallel_backend=self.parallel_options["backend"])
             elif not self.scf:
                 # In non-scf case, the self-energy of the leads is calculated for each energy point in the energy grid.
                 compute_all_self_energy(self.eta_lead, self.deviceprop.lead_L, self.deviceprop.lead_R,
-                                        self.kpoints, self.uni_grid, self.self_energy_save_path)
+                                        self.kpoints, self.uni_grid, self.self_energy_save_path,
+                                        n_jobs=self.parallel_options["n_jobs"],
+                                        batch_size=self.parallel_options["batch_size"],
+                                        parallel_backend=self.parallel_options["backend"])
         log.info(msg="-----------------------------------\n")
 
 

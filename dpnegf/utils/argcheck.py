@@ -1035,6 +1035,8 @@ def negf():
     doc_out_lcurrent = ""
     doc_density_options = ""
     doc_out_potential = ""
+    doc_override_overlap = ""
+    doc_parallel_options = ""
 
     return [
         Argument("scf", bool, optional=True, default=False, doc=doc_scf),
@@ -1064,7 +1066,19 @@ def negf():
         Argument("out_current", bool, optional=True, default=False, doc=doc_out_current),
         Argument("out_current_nscf", bool, optional=True, default=False, doc=doc_out_current_nscf),
         Argument("out_ldos", bool, optional=True, default=False, doc=doc_out_ldos),
-        Argument("out_lcurrent", bool, optional=True, default=False, doc=doc_out_lcurrent)
+        Argument("out_lcurrent", bool, optional=True, default=False, doc=doc_out_lcurrent),
+        Argument("override_overlap", str, optional=True, doc=doc_override_overlap),
+        Argument("parallel_options", dict, optional=True, sub_fields=parallel_options(), doc=doc_parallel_options)
+    ]
+
+def parallel_options():
+    doc_n_jobs = ""
+    doc_batch_size = ""
+    doc_backend = ""
+    return [
+        Argument("n_jobs", int, optional=True, default=-1, doc=doc_n_jobs),
+        Argument("batch_size", int, optional=True, default=200, doc=doc_batch_size),
+        Argument("backend", str, optional=True, default="loky", doc=doc_backend)
     ]
 
 def stru_options():

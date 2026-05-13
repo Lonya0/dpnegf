@@ -594,7 +594,8 @@ def _get_safe_n_jobs(lead_L, lead_R, requested_n_jobs=-1, max_memory_fraction=0.
 
 
 def compute_all_self_energy(eta, lead_L, lead_R, kpoints_grid, energy_grid,
-                            self_energy_save_path=None, n_jobs=-1, batch_size=200):
+                            self_energy_save_path=None, n_jobs=-1, batch_size=200,
+                            parallel_backend="loky"):
     """
     Computes and saves self-energy matrices for all combinations of k-points and energy values
     for left and right leads.
@@ -620,6 +621,10 @@ def compute_all_self_energy(eta, lead_L, lead_R, kpoints_grid, energy_grid,
         Number of parallel jobs to use. Default is -1 (use all available CPUs).
     batch_size : int, optional
         Number of (k, e) tasks per parallel batch. Default is 200.
+    parallel_backend : str, optional
+        Joblib backend used for self-energy calculation. Default is "loky"
+        to avoid pickling LeadProperty / TorchScript model objects when PyTorch
+        models are used.
 
     Returns
     -------
@@ -646,15 +651,16 @@ def compute_all_self_energy(eta, lead_L, lead_R, kpoints_grid, energy_grid,
         log.info(f"Adjusted n_jobs from {n_jobs} to {safe_n_jobs} due to memory constraints")
 
     total_tasks = [(k, e) for k in kpoints_grid for e in energy_grid]
+    log.info(f"Using joblib backend='{parallel_backend}' for self-energy calculation.")
     if len(total_tasks) <= batch_size:
-        Parallel(n_jobs=safe_n_jobs, backend="loky")(
+        Parallel(n_jobs=safe_n_jobs, backend=parallel_backend)(
             delayed(self_energy_worker)(k, e, eta, lead_L, lead_R, temp_dir)
             for k, e in total_tasks
         )
     else:
         for i in range(0, len(total_tasks), batch_size):
             batch = total_tasks[i:i+batch_size]
-            Parallel(n_jobs=safe_n_jobs, backend="loky")(
+            Parallel(n_jobs=safe_n_jobs, backend=parallel_backend)(
                 delayed(self_energy_worker)(k, e, eta, lead_L, lead_R, temp_dir)
                 for k, e in batch
             )
